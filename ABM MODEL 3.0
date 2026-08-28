@@ -1,51 +1,119 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; ROMANIAN UPU EVACUATION ABM — MODEL v3.0 
+;; ROMANIAN UPU EVACUATION ABM — MODEL v3.0
+;;
+;; AUTHORS
+;;   Ionuț Nica
+;;   Ștefan Ionescu
+;;   Camelia Delcea
+;;
+;; RELEASE INFORMATION
+;;   Version: 3.0.0
+;;   Release date: <2026-08-28>
+;;   NetLogo version: 7.0.4
 ;;
 ;; PURPOSE
-;;   Reproducible evaluation of emergency-exit configurations in a single-floor
-;;   Romanian Unitate de Primire Urgente (UPU), while representing patient
-;;   triage, mobility heterogeneity, staff constraints, preparation processes,
-;;   route feedback and matched reference-intervention comparisons.
+;;   Reproducible, ex-ante evaluation of emergency-exit configurations and
+;;   feedback-based control mechanisms in a schematic single-floor Romanian
+;;   Unitate de Primire Urgențe (UPU).
 ;;
-;; ORIGINAL CONTRIBUTION
-;;   1. Romanian national triage codes (Red/Yellow/Green/Blue/White) are kept
-;;      separate from evacuation mobility classes.
-;;   2. Two explicit cybernetics feedback loops are implemented:
-;;        a) route feedback: observe exit congestion -> compare route costs ->
-;;           retain/switch target exit -> update the system state;
-;;        b) resource feedback: observe patient queues and staff availability ->
-;;           calculate priority scores -> allocate nurses -> observe waiting
-;;           and preparation progress -> reallocate released staff.
-;;   3. Additional-exit interventions are evaluated with common random numbers:
-;;      matched scenario pairs share obstacles, case mix, initial positions and
-;;      stochastic parameter draws; only the proposed exits differ.
-;;   4. Outcomes are reported by role, triage code and mobility class, allowing
-;;      efficiency and distributional/equity effects to be distinguished.
+;;   The model represents patient triage, heterogeneous evacuation mobility,
+;;   nursing dependency, preparation processes, local movement conflicts,
+;;   congestion-sensitive exit choice, corrective nurse reallocation, and
+;;   matched reference-intervention comparisons.
 ;;
-;; SCOPE LIMITS
-;;   - fire-informed and earthquake-informed are behavioural profiles only.
-;;   - no fire growth, smoke, heat, toxic exposure, visibility, debris,
-;;     structural damage or aftershocks are physically simulated.
-;;   - critical delay is an evacuation-risk proxy, not a physical injury model.
-;;   - bed clearance is represented by a width constraint; this is not a full
-;;     rigid-body or continuous-space transport-device model.
+;; MODEL CONTRIBUTIONS AND DESIGN FEATURES
+;;   1. Romanian national triage categories
+;;      (Red / Yellow / Green / Blue / White) are represented separately from
+;;      evacuation mobility classes and nursing-assistance requirements.
 ;;
-;; FIXED SPATIAL SCALE AND CONFIGURABLE TEMPORAL SCALE
-;;   1 patch = 0.5 m.
-;;   time-step-s is 0.125 or 0.25 s/tick. The code verifies that the maximum
-;;   free speed cannot traverse more than one patch in one tick.
+;;   2. Two explicit closed-loop control mechanisms are implemented:
 ;;
-;; PARAMETERISATION, CALIBRATION AND VALIDATION
-;;   - assistance needs, assistant counts, active preparation ranges and
-;;     mobility classes follow Haghpanah et al. (2021) as a structural source.
-;;   - bed, wheelchair and walking free-speed distributions are Weibull
-;;     moment fits to Geoerg et al. (2025); class multipliers are exposed for
-;;     calibration.
-;;   - Rahouti et al. (2020) is reserved as an independent validation source
-;;     for ambulatory patient/staff speeds and pre-evacuation ranges.
-;;   - optional case-specific targets support calibration against a Romanian
-;;     UPU drill without pretending that literature parameterisation alone is
-;;     case calibration.
+;;      a) ROUTE FEEDBACK
+;;         observe path distance and current exit congestion
+;;         -> compare active-exit costs
+;;         -> retain or switch the target exit using hysteresis
+;;         -> move agents and update the congestion state.
+;;
+;;      b) RESOURCE-PRIORITY AND CORRECTIVE REALLOCATION FEEDBACK
+;;         observe unresolved patient demand, individual staff waiting,
+;;         nurse availability, and en-route deployment
+;;         -> calculate triage-, waiting-, and dependency-based priority
+;;         -> dispatch path-feasible nurses
+;;         -> replace an en-route nurse when a subsequently available nurse
+;;            provides a path-distance gain of at least 0.5 m
+;;         -> update assignments and the system state.
+;;
+;;   3. Structural exit interventions are evaluated using deterministic
+;;      common-random-number seed derivation. Obstacle and population
+;;      signatures are audited within matched reference-intervention pairs.
+;;      Exact-signature sensitivity results are used when complete signature
+;;      concordance is not obtained.
+;;
+;;   4. Outcomes are recorded at system, role, triage, and mobility levels.
+;;      These include RMET, completion, censoring, critical delay, exit use,
+;;      route switches, staff waiting, nurse utilisation, controller
+;;      activation, corrective reallocations, and dispatch distance saved.
+;;
+;; INTENDED USE
+;;   - Offline, ex-ante simulation-based planning and comparative analysis.
+;;   - Reproducible evaluation of structural and operational alternatives.
+;;   - Research and methodological experimentation.
+;;
+;;   The model is not a deployed decision-support system, does not receive
+;;   live hospital data, and does not provide real-time operational guidance.
+;;
+;; SCOPE AND INTERPRETATION LIMITS
+;;   - "fire-informed" and "earthquake-informed" are behavioural movement
+;;     profiles only.
+;;
+;;   - Fire growth, smoke, heat, toxic exposure, reduced visibility, debris,
+;;     structural damage, ground motion, and aftershocks are not physically
+;;     simulated.
+;;
+;;   - Temporary obstacles are generic non-traversable circulation patches;
+;;     they are not a physical fire-spread or earthquake-damage model.
+;;
+;;   - Critical delay is a prolonged-evacuation proxy, not a physical injury,
+;;     morbidity, or mortality prediction.
+;;
+;;   - Bed clearance is represented through a static width constraint and is
+;;     not a continuous-space rigid-body transport-device model.
+;;
+;;   - Absolute evacuation times are model outputs for comparative analysis,
+;;     not locally calibrated forecasts for a future evacuation of the focal
+;;     hospital.
+;;
+;; SPATIAL AND TEMPORAL SCALE
+;;   - Spatial resolution: 1 patch = 0.5 m.
+;;   - Default temporal resolution: 0.25 s/tick.
+;;   - Alternative resolution used for convergence testing: 0.125 s/tick.
+;;   - Common simulation horizon: 1,800 s.
+;;   - Critical-delay threshold: 480 s.
+;;
+;;   The model verifies that the maximum admissible displacement does not
+;;   exceed one patch in a single tick. Fractional movement is retained through
+;;   an accumulated movement-credit mechanism.
+;;
+;; PARAMETERIZATION, CALIBRATION, AND VALIDATION BOUNDARY
+;;   - Patient mobility classes, nursing-assistance requirements, team sizes,
+;;     and preparation logic are informed structurally by
+;;     Haghpanah et al. (2021).
+;;
+;;   - Bed-assisted, wheelchair, and ambulatory speed and preparation
+;;     distributions are parameterized from Geoerg et al. (2025).
+;;
+;;   - Rahouti et al. (2020) is used as a component-wise cross-source
+;;     comparator for ambulatory speed and first-move behaviour; it is not
+;;     treated as a global validation verdict.
+;;
+;;   - The model is literature-parameterized and internally verified but is
+;;     not formally calibrated to a drill conducted in the focal Romanian UPU.
+;;
+;;   - Neutral calibration multipliers remain at 1.0 unless defensible
+;;     case-specific empirical targets are supplied.
+;;
+;;   - Optional case-specific targets are provided for future calibration;
+;;     their availability must not be inferred from literature inputs alone.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 breed [patients patient]
