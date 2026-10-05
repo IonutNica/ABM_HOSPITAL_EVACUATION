@@ -7,8 +7,8 @@
 ;;   Ștefan Ionescu
 ;;
 ;; RELEASE INFORMATION
-;;   Version: 3.0.0
-;;   Release date: <2026-08-28>
+;;   Version: 3.0
+;;   Release date: 2026-10-05
 ;;   NetLogo version: 7.0.4
 ;;
 ;; PURPOSE
@@ -37,11 +37,20 @@
 ;;      b) RESOURCE-PRIORITY AND CORRECTIVE REALLOCATION FEEDBACK
 ;;         observe unresolved patient demand, individual staff waiting,
 ;;         nurse availability, and en-route deployment
-;;         -> calculate triage-, waiting-, and dependency-based priority
+;;         -> calculate a triage-dominant priority score, with waiting-time
+;;            and nursing-dependency modifiers
 ;;         -> dispatch path-feasible nurses
 ;;         -> replace an en-route nurse when a subsequently available nurse
 ;;            provides a path-distance gain of at least 0.5 m
 ;;         -> update assignments and the system state.
+;;
+;;         Baseline priority weights:
+;;           clinical urgency: 10 points per urgency level;
+;;           staff waiting: 1 point per minute;
+;;           nursing dependency: 2 points per required nurse.
+;;
+;;         Priority ordering and corrective nurse replacement are distinct
+;;         components of the resource-feedback mechanism.
 ;;
 ;;   3. Structural exit interventions are evaluated using deterministic
 ;;      common-random-number seed derivation. Obstacle and population
@@ -49,10 +58,37 @@
 ;;      Exact-signature sensitivity results are used when complete signature
 ;;      concordance is not obtained.
 ;;
-;;   4. Outcomes are recorded at system, role, triage, and mobility levels.
-;;      These include RMET, completion, censoring, critical delay, exit use,
-;;      route switches, staff waiting, nurse utilisation, controller
-;;      activation, corrective reallocations, and dispatch distance saved.
+;;   4. Outputs support system-, role-, triage-, and mobility-level analysis.
+;;      Recorded measures include all-agent and triage-specific RMET,
+;;      completion, censoring, critical delay, observed evacuation times,
+;;      exit use, route switches, staff waiting, nurse utilisation,
+;;      corrective reallocations, and dispatch distance saved.
+;;
+;;      The structural analysis uses all-agent and patient-only RMET as
+;;      co-primary outcomes under the common 1,800-s horizon.
+;;      Patient-only RMET is reconstructed from triage-specific RMET using
+;;      the corresponding patient counts. Horizon-capped triage-weighted
+;;      time additionally applies the category-specific urgency weights.
+;;
+;;      P95 is calculated from observed evacuation times among evacuated
+;;      agents and is distinct from the horizon-capped RMET outcome.
+;;
+;;   5. Priority-order diagnostics distinguish the scoring rule from its
+;;      realised ordering effects.
+;;
+;;      At eligible resource reviews, the model compares the static triage
+;;      ordering with the dynamic priority ordering under the same state.
+;;      Counters record:
+;;        - ordering-audit opportunities;
+;;        - differences in the complete patient order;
+;;        - differences in the top-ranked patient.
+;;
+;;      A separate deterministic score-level positive control compares
+;;      hypothetical same-triage patients with different waiting times and
+;;      nursing-team requirements.
+;;
+;;      This control checks score differentiation. Realised queue-order
+;;      differences and corrective reallocations are recorded separately.
 ;;
 ;; INTENDED USE
 ;;   - Offline, ex-ante simulation-based planning and comparative analysis.
@@ -109,8 +145,19 @@
 ;;   - The model is literature-parameterized and internally verified but is
 ;;     not formally calibrated to a drill conducted in the focal Romanian UPU.
 ;;
-;;   - Neutral calibration multipliers remain at 1.0 unless defensible
-;;     case-specific empirical targets are supplied.
+;;   - Baseline parameter multipliers are set to 1.0. The parameter-robustness
+;;     experiment varies these multipliers to assess sensitivity of the
+;;     structural exit contrast, not to fit local evacuation observations.
+;;
+;;   - Tested robustness levels:
+;;       bed-assisted speed:       0.90 / 1.00 / 1.10
+;;       wheelchair speed:         0.90 / 1.00 / 1.10
+;;       walking speed:            0.90 / 1.00 / 1.10
+;;       active preparation time:  0.75 / 1.00 / 1.25
+;;       staff response time:      0.75 / 1.00 / 1.25
+;;
+;;   - Sensitivity perturbations do not constitute local calibration.
+;;     Case-specific calibration would require appropriate empirical targets.
 ;;
 ;;   - Optional case-specific targets are provided for future calibration;
 ;;     their availability must not be inferred from literature inputs alone.
@@ -228,6 +275,9 @@ globals [
   resource-reallocations-count
   resource-reallocation-distance-saved-m
   resource-reallocation-min-gain-m
+  resource-priority-audit-opportunities-count
+  resource-priority-order-differences-count
+  resource-priority-top-choice-differences-count
   total-nurse-busy-time-s
   obstacle-signature-value
   population-signature-value
@@ -296,7 +346,6 @@ to set-default-parameters
   set dependency-weight 2
   set preferred-assistance-max-wait-s 60
 
-  ;; Calibration factors equal one before formal calibration.
   set bed-speed-cal-factor 1
   set wheelchair-speed-cal-factor 1
   set walking-speed-cal-factor 1
@@ -307,7 +356,6 @@ to set-default-parameters
   set critical-delay-threshold-s 480
   set simulation-horizon-s 1800
 
-  ;; Optional case-specific targets. Negative values mean "not supplied".
   set target-mean-time-s -1
   set target-p95-time-s -1
   set target-complete-time-s -1
@@ -410,9 +458,7 @@ end
 to setup
   clear-all
 
-
   reset-ticks
-
   resize-world -63 63 -31 31
 
   ;; ------------------------------------------------------------
@@ -436,7 +482,6 @@ to setup
   set backtracking-penalty-m 1
   set assistance-team-radius-m 0.5
 
-
   set resource-reallocation-min-gain-m 0.5
 
   ;; ------------------------------------------------------------
@@ -446,6 +491,9 @@ to setup
   set resource-reallocations-count 0
   set resource-reallocation-distance-saved-m 0
   set nurse-return-trips 0
+  set resource-priority-audit-opportunities-count 0
+  set resource-priority-order-differences-count 0
+  set resource-priority-top-choice-differences-count 0
   set total-nurse-busy-time-s 0
 
   ;; ------------------------------------------------------------
@@ -490,7 +538,6 @@ to setup
   set current-time-s 0
   set obstacle-signature-value obstacle-map-signature
   set population-signature-value population-signature
-
  
   reset-ticks
 
@@ -506,7 +553,6 @@ to setup
   set setup-status "ready"
   set setup-checkpoint "ready"
 end
-
 
 
 to validate-interface-parameters
@@ -598,7 +644,7 @@ to validate-interface-parameters
   ]
 end
 
-to-report assigned-patient-resource-priority  ;; nurse reporter
+to-report assigned-patient-resource-priority  
 
   if role != "nurse" [report -1]
   if assigned-patient-who < 0 [report -1]
@@ -2214,7 +2260,7 @@ to validate-population
 end
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; 6. DUAL CYBERNETIC FEEDBACK: RESOURCES AND ROUTES
+;; 6. DUAL CYBERNETICS FEEDBACK: RESOURCES AND ROUTES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
@@ -2308,6 +2354,60 @@ ask patients with [
   ]
 end
 
+to audit-resource-priority-ordering [queue-agentset]
+
+  ;; This audit concerns the cybernetics-priority rule only.
+  if resource-allocation-rule != "cybernetic-priority" [
+    stop
+  ]
+
+  ;; At least two patients are required for an ordering comparison.
+  if count queue-agentset < 2 [
+    stop
+  ]
+
+  ;; The ordering must be operationally actionable: at least one nurse
+  ;; must currently be available for dispatch.
+  let available-pool nurses with [
+    agent-state = "available" and
+    assigned-patient-who = -1 and
+    not evacuated? and
+    not censored?
+  ]
+
+  if not any? available-pool [
+    stop
+  ]
+
+  set resource-priority-audit-opportunities-count
+    resource-priority-audit-opportunities-count + 1
+
+  let static-order sort-by
+    [[a b] -> patient-higher-static-resource-priority? a b]
+    queue-agentset
+
+  let cybernetic-order sort-by
+    [[a b] -> patient-higher-cybernetic-resource-priority? a b]
+    queue-agentset
+
+  let static-whos
+    map [patient-agent -> [who] of patient-agent] static-order
+
+  let cybernetic-whos
+    map [patient-agent -> [who] of patient-agent] cybernetic-order
+
+  ;; Counter 1: the complete patient ordering differs.
+  if static-whos != cybernetic-whos [
+    set resource-priority-order-differences-count
+      resource-priority-order-differences-count + 1
+  ]
+
+  ;; Counter 2: the patient selected first differs.
+  if first static-whos != first cybernetic-whos [
+    set resource-priority-top-choice-differences-count
+      resource-priority-top-choice-differences-count + 1
+  ]
+end
 
 to allocate-nursing-resources-if-due
 
@@ -2329,6 +2429,10 @@ to allocate-nursing-resources-if-due
     assistance-need != "none" and
     length assigned-assistant-whos < assistants-required
   ])
+  
+  ;; Positive-control audit:
+;; compare the static and cybernetics queue orderings under the same state.
+  audit-resource-priority-ordering queue
 
   let ordered-patients sort-by
     [[a b] -> patient-higher-resource-priority? a b]
@@ -2343,38 +2447,137 @@ end
 
 
 to-report patient-higher-resource-priority? [patient-a patient-b]
+
+  ;; Comparator used by the actual allocation and reallocation procedures.
+  ;; It delegates to resource-priority-score, so the selected ordering follows
+  ;; the active feedback state and the selected allocation rule.
   let score-a [resource-priority-score] of patient-a
   let score-b [resource-priority-score] of patient-b
 
-  if score-a != score-b [report score-a > score-b]
+  if score-a != score-b [
+    report score-a > score-b
+  ]
+
+  ;; Deterministic tie-break for reproducibility.
   report [who] of patient-a < [who] of patient-b
 end
 
 
-to-report resource-priority-score  ;; patient reporter
+to-report patient-higher-static-resource-priority? [patient-a patient-b]
 
+  let score-a [static-resource-priority-score] of patient-a
+  let score-b [static-resource-priority-score] of patient-b
+
+  if score-a != score-b [
+    report score-a > score-b
+  ]
+
+  ;; Deterministic tie-break.
+  report [who] of patient-a < [who] of patient-b
+end
+
+
+to-report patient-higher-cybernetic-resource-priority? [patient-a patient-b]
+
+  let score-a [cybernetic-resource-priority-score] of patient-a
+  let score-b [cybernetic-resource-priority-score] of patient-b
+
+  if score-a != score-b [
+    report score-a > score-b
+  ]
+
+  ;; Deterministic tie-break.
+  report [who] of patient-a < [who] of patient-b
+end
+
+to-report static-resource-priority-score  ;; patient reporter
+  report 6 - triage-priority
+end
+
+
+to-report cybernetic-resource-priority-score  ;; patient reporter
   let wait-minutes waiting-for-staff-s / 60
 
-  ;; Static clinical control.
-  if not resource-feedback? [
-    report 6 - triage-priority
-  ]
-
-  if resource-allocation-rule = "triage-only" [
-    report 6 - triage-priority
-  ]
-
-  if resource-allocation-rule = "FIFO" [
-    report wait-minutes
-  ]
-
-  ;; Closed-loop cybernetic priority.
   report
     triage-priority-weight * (6 - triage-priority) +
     waiting-time-weight * wait-minutes +
     dependency-weight * assistants-required
 end
 
+to-report resource-priority-score  ;; patient reporter
+
+  let wait-minutes waiting-for-staff-s / 60
+
+  ;; Feedback OFF is the static clinical-triage comparator.
+  if not resource-feedback? [
+    report static-resource-priority-score
+  ]
+
+  if resource-allocation-rule = "triage-only" [
+    report static-resource-priority-score
+  ]
+
+  if resource-allocation-rule = "FIFO" [
+    report wait-minutes
+  ]
+
+  ;; Feedback ON uses the dynamic cybernetics-priority score.
+  report cybernetic-resource-priority-score
+end
+
+to-report resource-priority-order-difference-rate-pct
+
+  if resource-priority-audit-opportunities-count = 0 [
+    report 0
+  ]
+
+  report
+    100 * resource-priority-order-differences-count /
+    resource-priority-audit-opportunities-count
+end
+
+
+to-report resource-priority-top-choice-difference-rate-pct
+
+  if resource-priority-audit-opportunities-count = 0 [
+    report 0
+  ]
+
+  report
+    100 * resource-priority-top-choice-differences-count /
+    resource-priority-audit-opportunities-count
+end
+
+to-report resource-priority-positive-control-pass?
+
+  ;; Two hypothetical patients have the same triage rank.
+  ;; Under the static rule they are tied.
+  let triage-rank-a 3
+  let triage-rank-b 3
+
+  let wait-a-s 0
+  let wait-b-s 180
+
+  let team-a 1
+  let team-b 2
+
+  let static-a 6 - triage-rank-a
+  let static-b 6 - triage-rank-b
+
+  let cybernetic-a
+    triage-priority-weight * (6 - triage-rank-a) +
+    waiting-time-weight * (wait-a-s / 60) +
+    dependency-weight * team-a
+
+  let cybernetic-b
+    triage-priority-weight * (6 - triage-rank-b) +
+    waiting-time-weight * (wait-b-s / 60) +
+    dependency-weight * team-b
+
+  report
+    static-a = static-b and
+    cybernetic-b > cybernetic-a
+end
 
 to assign-available-nurses  ;; patient procedure
   let needed assistants-required - length assigned-assistant-whos
@@ -3138,7 +3341,15 @@ to verify-model-state
   ] [
     error "Bidirectional nurse-patient assignment consistency failed."
   ]
+if resource-priority-order-differences-count >
+   resource-priority-audit-opportunities-count [
+  error "Resource-priority order-difference count exceeds audit opportunities."
+]
 
+if resource-priority-top-choice-differences-count >
+   resource-priority-order-differences-count [
+  error "Top-choice differences exceed complete-order differences."
+]
   set verification-status "passed"
 end
 
